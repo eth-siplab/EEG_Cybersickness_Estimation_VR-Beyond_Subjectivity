@@ -1,3 +1,4 @@
+# --- original ---
 logs/
 save/
 *.png
@@ -5,4 +6,30 @@ logs0old/
 analysis/**/*.png
 torchutils
 tests/**/*.logs
+
+# --- human-subjects EEG data: never commit (lives outside the repo tree) ---
+*.npz
+*.csv
+datasets/
+
+# --- reproduction run artifacts (regenerable) ---
+logs_sweep/
+results_par/
+results_*.jsonl
+
+# --- python ---
 __pycache__/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- editor / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# internal memo, never publish
+EXTENSION_FINDINGS.md

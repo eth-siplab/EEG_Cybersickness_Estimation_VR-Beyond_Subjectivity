@@ -1,98 +1,120 @@
-# VR Cybersickness EEG Dataset - Beyond Subjectivity
+# Cybersickness EEG — reproduction
 
-This repository provides the framework and scripts for processing, training, and evaluating models related to the VR Cybersickness EEG dataset. The codebase is designed to handle different input modalities, train neural networks, and evaluate performance for classification or regression tasks.
+A from-scratch reproduction of **"Beyond Subjectivity: Continuous Cybersickness
+Detection Using EEG-based Multitaper Spectrum Estimation"** on the released
+JULIETE 16-participant VR-cycling dataset.
 
-## Dataset Download
+The original publication shipped the model/evaluation code but **not the
+preprocessing front-end** that turns the raw recordings into model inputs. This
+repo reconstructs that front-end (`preprocess.py`) and re-runs the paper's
+leave-one-subject-out evaluation with a plain PyTorch runner (`main.py`). With
+it, a third-party researcher can go from the raw dataset to the paper's results
+table.
 
-You can download the dataset from [this Google Drive folder](https://drive.google.com/drive/folders/1ijWfyNYktqKV0ACpgCNOLuhJf8YsWYfB).
+Upstream method/dataset: `eth-siplab/VR_Cybersickness_EEG_Dataset-Beyond_Subjectivity`.
 
-## Features
-- **Modular Design**: Supports various input types (e.g., kinematic, power-spectral-difference).
-- **Flexible Task Selection**: Allows for both classification and regression tasks.
-- **Customizable Training**: Integrated with options for early stopping, learning rate scheduling, and performance logging.
-- **Reproducibility**: Seed setting ensures reproducible results across experiments.
+---
 
-## Requirements
+## 1. Install
 
-The repository is built with Python and requires the following dependencies:
-
-- `torch` (PyTorch)
-- `torchvision`
-- `numpy`
-- `argparse`
-- `torchutils` (for training utilities)
-
-Install the required dependencies using:
 ```bash
+conda create -n cybersickness python=3.10 -y
+conda activate cybersickness
 pip install -r requirements.txt
 ```
 
-## Usage
+`torch` with CUDA is recommended (a full sweep is ~1 h on a small GPU; CPU works
+but is much slower).
 
-### Setting Up
-Clone the repository and navigate to the project directory:
-```bash
-git clone https://github.com/eth-siplab/VR_Cybersickness_EEG_Dataset-Beyond_Subjectivity
-cd VR_Cybersickness_EEG_Dataset-Beyond_Subjectivity
+## 2. Get the data
+
+The EEG recordings are **not** in this repo (human-subjects data, released
+separately with the paper). The dataset is shared as **Google Sheets**: one Drive
+folder per participant (`0001`, `0003`, …), each holding per-condition sheets for
+several streams (`EEG`, `Transforms`, `Path`, `Accelerometer`, `EyeGaze`,
+`SubjectiveCs`). Bulk-download the Drive folder — each sheet is converted to
+`.xlsx`. The preprocessor needs three streams per recording (they share one Unity
+clock); `preprocess.py` reads `.xlsx` or `.csv`:
+
+```
+<PID>_<COND>_EEG.xlsx           Millis, Hardware, <24 DSI-24 channels>
+<PID>_<COND>_Transforms.xlsx    Millis, HeadPosition_{X,Y,Z}, HeadRotation_{Yaw,Pitch,Roll}
+<PID>_<COND>_SubjectiveCs.xlsx  Millis, Rating, ChangePerSec      (joystick sickness 0-1)
 ```
 
-### Running the Script
-The main entry point is the `main.py` script, which can be executed with the following options:
+Put those (flat) in one directory, e.g. `…/juliete/raw/`. 13 subjects have
+usable recordings: `0001 0002 0003 0005 0006 0007 1000 1001 1002 1003 1004 1101 1102`
+(header-only/empty exports are skipped automatically).
+
+## 3. Reproduce
 
 ```bash
-python main.py --patient <PATIENT_ID> \
-               --seed <SEED_VALUE> \
-               --task <TASK_TYPE> \
-               [--wandb] \
-               [--input-type <INPUT_TYPE>] \
-               [--logprefix <LOG_DIRECTORY>] \
-               [--output] \
-               [--no-cuda] \
-               [--no-save-model] \
-               [--no-load-model]
+# (a) raw .xlsx/.csv -> .npz cache (multitaper TR-PSD + kinematics + label). Run once.
+python preprocess.py --raw  /path/to/juliete/raw \
+                     --out  /path/to/juliete/.cache --overwrite
+
+# (b) one leave-one-subject-out fold (held-out subject 0003, headline model)
+python main.py --patient 0003 --seed 42 \
+               --cache-prefix /path/to/juliete/.cache
+
+# (c) the full grid: 4 input-types x 13 subjects x 3 seeds, ~4 GPU-h
+#     (pass the python with torch as PY, and --cache-prefix via the sweep)
+sh parallel_sweep.sh 4                       # 4 folds in parallel
+
+# (d) seed-averaged results table
+python aggregate.py results_par/*.jsonl
 ```
 
-#### Arguments:
-- `--patient`: Patient ID (required).
-- `--seed`: Random seed for reproducibility (required).
-- `--num-epochs`: Number of training epochs (default: 200).
-- `--batch-size`: Batch size for training (default: 8).
-- `--task`: Task type (`classification` or `regression`) (required).
-- `--wandb`: Enable Weights & Biases logging (optional).
-- `--input-type`: Input data type (default: `multi-segment`).
-  - Options: `kinematic`, `power-spectral-difference`, `power-spectral-no-eeg`, `power-spectral-no-kinematic`.
-- `--logprefix`: Prefix for log and checkpoint files.
-- `--output`: Enable output logging to console.
-- `--no-cuda`: Use CPU instead of GPU.
-- `--no-save-model`: Skip saving the model checkpoint.
-- `--no-load-model`: Skip loading pre-trained model checkpoints.
+`--input-type` selects the model from `networks.py`:
+`power-spectral-difference` (TR-PSD+IMU, the headline), `power-spectral-no-kinematic`
+(TR-PSD only), `power-spectral-no-eeg` (IMU only), `kinematic`.
 
-### Example:
-```bash
-python main.py --patient 0012 --seed 42 --task classification --input-type kinematic --logprefix ./logs --output
-```
+## 4. Expected results
 
-## Key Components
+Leave-one-subject-out, 13 subjects × 3 seeds (10/20/40), mean ± std across seeds,
+pooled over all held-out recordings. "Acc" is the paper's windowed accuracy
+(`leaky_accuracy@0.10`).
 
-### `loader`
-Handles loading of training, validation, and test datasets. Supports multiple data types and formats.
+| input-type (`--input-type`) | paper Table row | MAE | MSE | acc@0.10 | paper MAE / MSE / Acc |
+|---|---|---|---|---|---|
+| `kinematic`                 | Kinematic model (Li2023)               | 0.118 | 0.033 | 61.5 ± 4.9 % | 0.857 / 0.162 / 27.08 |
+| `power-spectral-no-eeg`     | Ours, IMU                              | 0.122 | 0.034 | 59.6 ± 4.7 % | 0.931 / 0.193 / 38.22 |
+| `power-spectral-no-kinematic` | Ours, Filtering+TR-PSD               | 0.100 | 0.034 | 85.6 ± 5.6 % | 0.620 / 0.109 / 69.35 |
+| `power-spectral-difference` | Ours, Filtering+TR-PSD+IMU (**best**)  | **0.099** | **0.033** | **81.2 ± 1.0 %** | 0.638 / 0.092 / 76.83 |
 
-### `networks`
-Defines the architecture and configurations for training neural networks based on the selected task and input type.
+mean-predictor baseline: MAE 0.114, acc@0.10 ~29 %.
 
-### `trainer`
-Integrates model training, validation, and testing workflows. Includes:
-- **Early Stopping**: Monitors validation loss to prevent overfitting.
-- **Average Score Logger**: Tracks performance metrics during training.
+**What reproduces**
+- **Modality ranking holds** — EEG spectral features ≫ motion. The two TR-PSD
+  models reach ~81–86 % windowed accuracy; the two motion-only models sit at
+  ~60–66 % and barely beat the mean-predictor baseline on MAE. This is the paper's
+  central claim ("methods solely based on kinematic features fail").
+- **Best config holds** — TR-PSD+IMU and TR-PSD-only are the top two, as published.
+- **Beats the mean predictor** — acc@0.10 81–86 % vs ~29 %.
+- **The 1–49 Hz filter helped** — recovering the 30–45 Hz 1/f band raised the
+  headline acc@0.10 by giving the model the gamma/1-f band the paper names as the
+  cybersickness correlate.
 
-### `set_seed`
-Utility to ensure reproducibility by setting seeds for Python, NumPy, and PyTorch.
+## 5. Pipeline (what `preprocess.py` does)
 
-## Logging
-Logs are written to both console and files (if `--logprefix` is specified). Log files include model checkpoints and detailed training/validation/testing performance.
+Per recording, on the shared Unity clock, in non-overlapping 3 s windows:
 
-## License
-This project is licensed under the MIT License.
+1. EEG: 50 Hz notch (mains) + 1–49 Hz Butterworth band-pass (keeps the 30–45 Hz
+   1/f band) at 300 Hz, then resample to 100 Hz.
+2. Multitaper PSD (DPSS tapers) → `psd_raw`; plus the 1/f spectral slope.
+3. Head-motion features and the joystick label from `Transforms.csv` / `SubjectiveCs.csv`.
 
-## Acknowledgments
-This repository is part of ongoing research at ETH SIPLab. Special thanks to the contributors and developers of `torchutils` and related libraries.
+The temporal-relative differencing (TR-PSD) and the kinematic 16-tuple are computed
+in `loader.py` (unchanged from upstream). A couple of preprocessing details were
+not pinned by the paper and are documented reconstruction choices (multitaper
+`NW=3, K=5`; 49 Hz low-pass to preserve the 1/f band; per-window label = max).
+
+## 6. Repo map
+
+| file | role |
+|---|---|
+| `preprocess.py` | raw `.xlsx`/`.csv` → `.npz` cache (the reconstructed front-end) |
+| `loader.py`, `networks.py`, `metrics.py` | upstream data/model/metric code (reused) |
+| `main.py` | one leave-one-subject-out fold, plain PyTorch |
+| `evaluate.sh`, `sweep.sh`, `parallel_sweep.sh` | leave-one-subject-out drivers (loop `main.py`) |
+| `aggregate.py`, `parse_logs.py` | seed-averaged metric aggregation (`parse_logs.py` is the `evaluate.sh` entry point) |

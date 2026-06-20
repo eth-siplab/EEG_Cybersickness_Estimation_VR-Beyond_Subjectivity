@@ -1,40 +1,25 @@
 #!/bin/sh
+# Full leave-one-subject-out evaluation, then aggregate.
+# Loops main.py over input-types x seeds x held-out subjects (each fold appends a
+# JSON line to results/<input-type>.jsonl), then parses with parse_logs.py.
+# Usage: PY=python sh evaluate.sh
+PY=${PY:-python}
+HERE=$(dirname "$0")
+mkdir -p "$HERE/results"
 
-run_experiment() {
-        task=$1
-        model=$2
+INPUT_TYPES="power-spectral-difference power-spectral-no-kinematic power-spectral-no-eeg kinematic"
+PATIENTS="0001 0002 0003 0005 0006 0007 1000 1001 1002 1003 1004 1101 1102"
+SEEDS="10 20 40"
 
-        echo model=$model task=$task
+for it in $INPUT_TYPES; do
+  out="$HERE/results/${it}.jsonl"
+  : > "$out"
+  for s in $SEEDS; do
+    for p in $PATIENTS; do
+      echo "[$(date +%T)] $it patient=$p seed=$s"
+      $PY "$HERE/main.py" --patient "$p" --seed "$s" --input-type "$it" --out "$out"
+    done
+  done
+done
 
-        logprefix="save/$model/$task"
-
-        for seed in {10,20,40}
-        do
-                for patient in {0001,0002,0003,0005,0006,0007,1000,1001,1002,1003,1004,1101,1102}
-                do 
-                        #if [ ! -f "$logprefix/logs/$patient-$seed.log" ]
-                        #then
-                                while [ "$(pgrep -c -P$$)" -ge 10 ]; do sleep 1; done
-
-                                echo seed=$seed patient=$patient
-                                
-                                python3 main.py --patient $patient \
-                                                --seed $seed \
-                                                --task $task \
-                                                --input-type $model \
-                                                --num-epochs 500 \
-                                                --batch-size 8 \
-                                                --logprefix $logprefix &
-                                                
-                        #fi
-                done
-        done
-
-        while [ "$(pgrep -c -P$$)" -ge 1 ]; do sleep 1; done
-        python3 ../../parse_logs.py --prefix $logprefix
-}
-
-#run_experiment 'regression' 'kinematic'
-#run_experiment 'regression' 'power-spectral-difference'
-run_experiment 'regression' 'power-spectral-no-eeg'
-run_experiment 'regression' 'power-spectral-no-kinematic'
+$PY "$HERE/parse_logs.py" "$HERE"/results/*.jsonl

@@ -1,0 +1,10 @@
+# Reproduction dependencies (Python >= 3.10).
+# Install into a fresh environment, e.g.  conda create -n cybersickness python=3.10
+numpy
+scipy
+scikit-learn
+pandas
+torch            # CUDA build recommended; CPU works but is slow
+torchvision      # provides get_model/register_model used by networks.py + main.py
+# optional, only for the aperiodic / 1-f analysis scripts:
+# specparam
